@@ -24,6 +24,8 @@ import javax.jms.JMSException;
 
 import org.flcit.commons.core.util.FunctionUtils;
 import org.flcit.commons.core.util.PropertyUtils;
+import org.flcit.commons.core.util.StringUtils;
+import org.keycloak.Config.Scope;
 
 import com.tibco.tibjms.TibjmsConnectionFactory;
 import com.tibco.tibjms.TibjmsQueue;
@@ -36,28 +38,112 @@ import com.tibco.tibjms.TibjmsTopic;
  */
 public final class JmsClientBuilder {
 
+    private static final String SERVER_URL = "server-url";
+
     private JmsClientBuilder() { }
 
     /**
      * @param properties
      * @param prefix
      * @return
-     * @throws JMSException
      */
-    public static ConnectionFactory buildConnectionFactory(Properties properties, String prefix) throws JMSException {
+    public static boolean hasServerUrl(Properties properties, String prefix) {
+        return hasServerUrl(properties.getProperty(prefix + SERVER_URL));
+    }
+
+    public static boolean hasServerUrl(Scope config, String prefix) {
+        return hasServerUrl(config.get(prefix + SERVER_URL));
+    }
+
+    private static boolean hasServerUrl(String serverUrl) {
+        return StringUtils.hasLength(serverUrl);
+    }
+
+    /**
+     * @param properties
+     * @param prefix
+     * @return
+     */
+    public static ConnectionFactory buildSafelyConnectionFactory(Properties properties, String prefix) {
+        try {
+            return JmsClientBuilder.buildConnectionFactory(properties, prefix);
+        } catch (JMSException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * @param config
+     * @param prefix
+     * @return
+     */
+    public static ConnectionFactory buildSafelyConnectionFactory(Scope config, String prefix) {
+        try {
+            return JmsClientBuilder.buildConnectionFactory(config, prefix);
+        } catch (JMSException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static ConnectionFactory buildConnectionFactory(Properties properties, String prefix) throws JMSException {
+        final TibjmsConnectionFactory connectionFactory = buildConnectionFactory(
+                properties.getProperty(prefix + SERVER_URL),
+                properties.getProperty(prefix + "client-id"),
+                properties.getProperty(prefix + "user-name"),
+                properties.getProperty(prefix + "user-password"),
+                properties.getProperty(prefix + "multicast-daemon")
+                );
+        setConnectionFactory(connectionFactory,
+                PropertyUtils.getNumber(properties, prefix + "connection-attempt-count", Integer.class),
+                PropertyUtils.getNumber(properties, prefix + "connection-attempt-delay", Integer.class),
+                PropertyUtils.getNumber(properties, prefix + "connection-attempt-timeout", Integer.class),
+                PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-count", Integer.class),
+                PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-delay", Integer.class),
+                PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-timeout", Integer.class),
+                PropertyUtils.getBoolean(properties, prefix + "multicast-enabled")
+                );
+        return connectionFactory;
+    }
+
+    private static ConnectionFactory buildConnectionFactory(Scope config, String prefix) throws JMSException {
+        final TibjmsConnectionFactory connectionFactory = buildConnectionFactory(
+                config.get(prefix + SERVER_URL),
+                config.get(prefix + "client-id"),
+                config.get(prefix + "user-name"),
+                config.get(prefix + "user-password"),
+                config.get(prefix + "multicast-daemon")
+                );
+        setConnectionFactory(connectionFactory,
+                config.getInt(prefix + "connection-attempt-count"),
+                config.getInt(prefix + "connection-attempt-delay"),
+                config.getInt(prefix + "connection-attempt-timeout"),
+                config.getInt(prefix + "reconnection-attempt-count"),
+                config.getInt(prefix + "reconnection-attempt-delay"),
+                config.getInt(prefix + "reconnection-attempt-timeout"),
+                config.getBoolean(prefix + "multicast-enabled")
+                );
+        return connectionFactory;
+    }
+
+    private static TibjmsConnectionFactory buildConnectionFactory(String serverUrl, String clientID, String userName, String userPassword, String multicastDaemon) throws JMSException {
         final TibjmsConnectionFactory connectionFactory = new TibjmsConnectionFactory();
-        connectionFactory.setServerUrl(properties.getProperty(prefix + "server-url"));
-        connectionFactory.setClientID(properties.getProperty(prefix + "client-id"));
-        connectionFactory.setUserName(properties.getProperty(prefix + "user-name"));
-        connectionFactory.setUserPassword(properties.getProperty(prefix + "user-password"));
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "connection-attempt-count", Integer.class), connectionFactory::setConnAttemptCount);
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "connection-attempt-delay", Integer.class), connectionFactory::setConnAttemptDelay);
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "connection-attempt-timeout", Integer.class), connectionFactory::setConnAttemptTimeout);
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-timeout", Integer.class), connectionFactory::setReconnAttemptCount);
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-delay", Integer.class), connectionFactory::setReconnAttemptDelay);
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getNumber(properties, prefix + "reconnection-attempt-timeout", Integer.class), connectionFactory::setReconnAttemptTimeout);
-        connectionFactory.setMulticastDaemon(properties.getProperty(prefix + "multicast-daemon"));
-        FunctionUtils.consumeIfNotNull(() -> PropertyUtils.getBoolean(properties, prefix + "multicast-enabled"), connectionFactory::setMulticastEnabled);
+        connectionFactory.setServerUrl(serverUrl);
+        connectionFactory.setClientID(clientID);
+        connectionFactory.setUserName(userName);
+        connectionFactory.setUserPassword(userPassword);
+        connectionFactory.setMulticastDaemon(multicastDaemon);
+        return connectionFactory;
+    }
+
+    @SuppressWarnings("java:S107")
+    private static ConnectionFactory setConnectionFactory(TibjmsConnectionFactory connectionFactory, Integer connectionAttemptCount, Integer connectionAttemptDelay, Integer connectionAttemptTimeout, Integer reconnectionAttemptCount, Integer reconnectionAttemptDelay, Integer reconnectionAttemptTimeout, Boolean multicastEnabled) {
+        FunctionUtils.consumeIfNotNull(connectionAttemptCount, connectionFactory::setConnAttemptCount);
+        FunctionUtils.consumeIfNotNull(connectionAttemptDelay, connectionFactory::setConnAttemptDelay);
+        FunctionUtils.consumeIfNotNull(connectionAttemptTimeout, connectionFactory::setConnAttemptTimeout);
+        FunctionUtils.consumeIfNotNull(reconnectionAttemptCount, connectionFactory::setReconnAttemptCount);
+        FunctionUtils.consumeIfNotNull(reconnectionAttemptDelay, connectionFactory::setReconnAttemptDelay);
+        FunctionUtils.consumeIfNotNull(reconnectionAttemptTimeout, connectionFactory::setReconnAttemptTimeout);
+        FunctionUtils.consumeIfNotNull(multicastEnabled, connectionFactory::setMulticastEnabled);
         return connectionFactory;
     }
 
@@ -67,13 +153,24 @@ public final class JmsClientBuilder {
      * @return
      */
     public static Destination buildDestination(Properties properties, String prefix) {
-        String address = properties.getProperty(prefix + "queue");
-        if (address != null) {
-            return new TibjmsQueue(address);
+        return buildDestination(properties.getProperty(prefix + "queue"), properties.getProperty(prefix + "topic"));
+    }
+
+    /**
+     * @param config
+     * @param prefix
+     * @return
+     */
+    public static Destination buildDestination(Scope config, String prefix) {
+        return buildDestination(config.get(prefix + "queue"), config.get(prefix + "topic"));
+    }
+
+    private static Destination buildDestination(String addressQueue, String addressTopic) {
+        if (StringUtils.hasLength(addressQueue)) {
+            return new TibjmsQueue(addressQueue);
         }
-        address = properties.getProperty(prefix + "topic");
-        if (address != null) {
-            return new TibjmsTopic(address);
+        if (StringUtils.hasLength(addressTopic)) {
+            return new TibjmsTopic(addressTopic);
         }
         return null;
     }
